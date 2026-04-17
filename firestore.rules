@@ -2,10 +2,6 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ─────────────────────────────────────────────
-    // HELPERS
-    // ─────────────────────────────────────────────
-
     function isAuth() {
       return request.auth != null;
     }
@@ -26,78 +22,51 @@ service cloud.firestore {
       return isAuth() && getUserData().banned == true;
     }
 
-    // ─────────────────────────────────────────────
-    // USERS
-    // ─────────────────────────────────────────────
-
+    // ── USERS ──
     match /users/{userId} {
-      // Leitura pública para usuários autenticados (necessário para validar role)
       allow read: if isAuth();
-
-      // Criação apenas pelo próprio usuário no momento do login
       allow create: if isAuth() && request.auth.uid == userId;
-
-      // Update: admin pode atualizar qualquer campo exceto role=superadmin
-      // Superadmin pode atualizar tudo
-      // Usuário só pode atualizar seus próprios dados básicos
       allow update: if
         (isAuth() && request.auth.uid == userId &&
           !('role' in request.resource.data) &&
           !('banned' in request.resource.data))
-        ||
-        (isAdmin() &&
-          // Admin não pode promover a superadmin nem alterar superadmins
-          request.resource.data.role != 'superadmin' &&
-          getUserData(userId).role != 'superadmin')
-        ||
-        isSuperAdmin();
-
+        || (isAdmin() &&
+            request.resource.data.role != 'superadmin' &&
+            resource.data.role != 'superadmin')
+        || isSuperAdmin();
       allow delete: if isSuperAdmin();
     }
 
-    // ─────────────────────────────────────────────
-    // GAMES
-    // ─────────────────────────────────────────────
-
+    // ── GAMES ──
     match /games/{gameId} {
-      // Leitura pública
       allow read: if true;
-
-      // Criação e edição apenas para admin
-      allow create, update: if isAdmin();
-
-      // Exclusão apenas para admin
-      allow delete: if isAdmin();
+      allow create, update, delete: if isAdmin();
     }
 
-    // ─────────────────────────────────────────────
-    // REVIEWS
-    // ─────────────────────────────────────────────
-
+    // ── REVIEWS ──
     match /reviews/{reviewId} {
-      // Leitura pública
       allow read: if true;
-
-      // Criar: usuário autenticado, não banido, e só para si mesmo
-      allow create: if
-        isAuth() &&
-        !isBanned() &&
-        request.resource.data.userId == request.auth.uid;
-
-      // Editar: dono da review ou admin
+      allow create: if isAuth() && !isBanned() && request.resource.data.userId == request.auth.uid;
       allow update: if
-        (isAuth() &&
-          !isBanned() &&
+        (isAuth() && !isBanned() &&
           resource.data.userId == request.auth.uid &&
           request.resource.data.userId == request.auth.uid)
-        ||
-        isAdmin();
-
-      // Excluir: dono ou admin
+        || isAdmin();
       allow delete: if
         (isAuth() && resource.data.userId == request.auth.uid)
-        ||
-        isAdmin();
+        || isAdmin();
+    }
+
+    // ── CATEGORIES ──
+    match /categories/{id} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ── PLATFORMS ──
+    match /platforms/{id} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
     }
   }
 }

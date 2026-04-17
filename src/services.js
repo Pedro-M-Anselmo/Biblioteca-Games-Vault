@@ -1,10 +1,15 @@
 // src/services.js
-// Camada de serviços — toda comunicação com Firebase fica aqui
 
 import {
   GoogleAuthProvider,
   signInWithPopup,
   signOut,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updatePassword,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  updateProfile,
 } from "firebase/auth";
 
 import {
@@ -20,20 +25,18 @@ import {
   where,
   orderBy,
   serverTimestamp,
-  onSnapshot,
 } from "firebase/firestore";
 
 import {
   ref,
   uploadBytes,
   getDownloadURL,
-  deleteObject,
 } from "firebase/storage";
 
 import { auth, db, storage } from "./firebase";
 
 // ─────────────────────────────────────────────
-// AUTH
+// AUTH — Google
 // ─────────────────────────────────────────────
 
 export async function loginWithGoogle() {
@@ -41,22 +44,59 @@ export async function loginWithGoogle() {
   const result = await signInWithPopup(auth, provider);
   const user = result.user;
 
-  // Cria/atualiza perfil no Firestore
   const userRef = doc(db, "users", user.uid);
   const userSnap = await getDoc(userRef);
 
   if (!userSnap.exists()) {
     await setDoc(userRef, {
       name: user.displayName,
+      username: user.displayName,
       email: user.email,
       photo: user.photoURL,
       role: "user",
       banned: false,
+      provider: "google",
       createdAt: serverTimestamp(),
     });
   }
 
   return user;
+}
+
+// ─────────────────────────────────────────────
+// AUTH — Email/Senha
+// ─────────────────────────────────────────────
+
+export async function registerWithEmail(username, email, password) {
+  const result = await createUserWithEmailAndPassword(auth, email, password);
+  const user = result.user;
+
+  await updateProfile(user, { displayName: username });
+
+  await setDoc(doc(db, "users", user.uid), {
+    name: username,
+    username: username,
+    email: email,
+    photo: null,
+    role: "user",
+    banned: false,
+    provider: "email",
+    createdAt: serverTimestamp(),
+  });
+
+  return user;
+}
+
+export async function loginWithEmail(email, password) {
+  const result = await signInWithEmailAndPassword(auth, email, password);
+  return result.user;
+}
+
+export async function changePassword(currentPassword, newPassword) {
+  const user = auth.currentUser;
+  const credential = EmailAuthProvider.credential(user.email, currentPassword);
+  await reauthenticateWithCredential(user, credential);
+  await updatePassword(user, newPassword);
 }
 
 export async function logoutUser() {
@@ -82,6 +122,56 @@ export async function updateUser(uid, data) {
 }
 
 // ─────────────────────────────────────────────
+// CATEGORIES
+// ─────────────────────────────────────────────
+
+export async function getCategories() {
+  const snap = await getDocs(query(collection(db, "categories"), orderBy("name")));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+export async function createCategory(name) {
+  const ref = await addDoc(collection(db, "categories"), {
+    name,
+    createdAt: serverTimestamp(),
+  });
+  return ref.id;
+}
+
+export async function updateCategory(id, name) {
+  await updateDoc(doc(db, "categories", id), { name });
+}
+
+export async function deleteCategory(id) {
+  await deleteDoc(doc(db, "categories", id));
+}
+
+// ─────────────────────────────────────────────
+// PLATFORMS
+// ─────────────────────────────────────────────
+
+export async function getPlatforms() {
+  const snap = await getDocs(query(collection(db, "platforms"), orderBy("name")));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+export async function createPlatform(name) {
+  const ref = await addDoc(collection(db, "platforms"), {
+    name,
+    createdAt: serverTimestamp(),
+  });
+  return ref.id;
+}
+
+export async function updatePlatform(id, name) {
+  await updateDoc(doc(db, "platforms", id), { name });
+}
+
+export async function deletePlatform(id) {
+  await deleteDoc(doc(db, "platforms", id));
+}
+
+// ─────────────────────────────────────────────
 // GAMES
 // ─────────────────────────────────────────────
 
@@ -99,10 +189,7 @@ export async function getGame(gameId) {
 
 export async function createGame(data, imageFile) {
   let imageUrl = data.image || "";
-
-  if (imageFile) {
-    imageUrl = await uploadGameImage(imageFile);
-  }
+  if (imageFile) imageUrl = await uploadGameImage(imageFile);
 
   const ref = await addDoc(collection(db, "games"), {
     ...data,
@@ -110,35 +197,25 @@ export async function createGame(data, imageFile) {
     reviewsEnabled: true,
     createdAt: serverTimestamp(),
   });
-
   return ref.id;
 }
 
 export async function updateGame(gameId, data, imageFile) {
   let updateData = { ...data };
-
-  if (imageFile) {
-    updateData.image = await uploadGameImage(imageFile, gameId);
-  }
-
+  if (imageFile) updateData.image = await uploadGameImage(imageFile, gameId);
   await updateDoc(doc(db, "games", gameId), updateData);
 }
 
 export async function deleteGame(gameId) {
-  // Deleta reviews do jogo
   const reviewsSnap = await getDocs(
     query(collection(db, "reviews"), where("gameId", "==", gameId))
   );
-  const deletePromises = reviewsSnap.docs.map((d) =>
-    deleteDoc(doc(db, "reviews", d.id))
-  );
-  await Promise.all(deletePromises);
-
+  await Promise.all(reviewsSnap.docs.map((d) => deleteDoc(doc(db, "reviews", d.id))));
   await deleteDoc(doc(db, "games", gameId));
 }
 
 // ─────────────────────────────────────────────
-// STORAGE — imagens de jogos
+// STORAGE
 // ─────────────────────────────────────────────
 
 export async function uploadGameImage(file, gameId) {
@@ -185,7 +262,6 @@ export async function getUserReviewForGame(userId, gameId) {
 
 export async function upsertReview(userId, gameId, reviewData) {
   const existing = await getUserReviewForGame(userId, gameId);
-
   if (existing) {
     await updateDoc(doc(db, "reviews", existing.id), {
       ...reviewData,
@@ -205,32 +281,4 @@ export async function upsertReview(userId, gameId, reviewData) {
 
 export async function deleteReview(reviewId) {
   await deleteDoc(doc(db, "reviews", reviewId));
-}
-
-// ─────────────────────────────────────────────
-// REALTIME — listeners opcionais
-// ─────────────────────────────────────────────
-
-export function onGamesChange(callback) {
-  return onSnapshot(
-    query(collection(db, "games"), orderBy("createdAt", "desc")),
-    (snap) => {
-      const games = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      callback(games);
-    }
-  );
-}
-
-export function onReviewsChange(gameId, callback) {
-  return onSnapshot(
-    query(
-      collection(db, "reviews"),
-      where("gameId", "==", gameId),
-      orderBy("createdAt", "desc")
-    ),
-    (snap) => {
-      const reviews = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      callback(reviews);
-    }
-  );
 }
